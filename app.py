@@ -239,7 +239,7 @@ with st.sidebar:
         "<div style='font-size:1.25rem;font-weight:700;letter-spacing:.3px;'>"
         "🤖 Smart Chatbot</div>"
         "<div style='font-size:.75rem;opacity:.6;margin-bottom:.6rem;'>"
-        "v1.6 · free AI stack</div>",
+        "v1.7 · free AI stack</div>",
         unsafe_allow_html=True,
     )
     st.button("🆕 New chat", on_click=_cb_new_chat, use_container_width=True,
@@ -339,21 +339,30 @@ with st.sidebar:
                 st.caption("⚠️ Ollama not detected. Install from ollama.com, "
                            "then `ollama pull qwen2.5-coder`")
         elif provider == "groq":
-            groq_key = st.text_input("GROQ_API_KEY", type="password",
-                                     help="https://console.groq.com/keys",
-                                     key="cfg_groq_key")
+            groq_key = st.text_input(
+                "GROQ_API_KEY", type="password",
+                help=("Leave blank if the app is deployed with a GROQ_API_KEY secret. "
+                      "Otherwise get a free key at https://console.groq.com/keys"),
+                key="cfg_groq_key",
+            )
             model = st.text_input("Model", "llama-3.3-70b-versatile",
                                   key="cfg_groq_model")
         elif provider == "gemini":
-            gemini_key = st.text_input("GEMINI_API_KEY", type="password",
-                                       help="https://aistudio.google.com/apikey",
-                                       key="cfg_gemini_key")
+            gemini_key = st.text_input(
+                "GEMINI_API_KEY", type="password",
+                help=("Leave blank if deployed with GEMINI_API_KEY secret. "
+                      "Otherwise get a free key at https://aistudio.google.com/apikey"),
+                key="cfg_gemini_key",
+            )
             model = st.text_input("Model", "gemini-2.0-flash", key="cfg_gemini_model")
 
     # ---- provider readiness indicator ----
+    # Consider environment variables (Streamlit secrets) as valid too.
+    _has_groq_key = bool(groq_key) or bool(os.getenv("GROQ_API_KEY"))
+    _has_gemini_key = bool(gemini_key) or bool(os.getenv("GEMINI_API_KEY"))
     _ready = (provider == "ollama") or \
-             (provider == "groq" and bool(groq_key)) or \
-             (provider == "gemini" and bool(gemini_key))
+             (provider == "groq" and _has_groq_key) or \
+             (provider == "gemini" and _has_gemini_key)
     st.caption(("🟢 " if _ready else "🔴 ") +
                f"{provider} · {model or '-'}" +
                ("" if _ready else "  — add your API key above"))
