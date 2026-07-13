@@ -238,8 +238,8 @@ Being transparent about what this project intentionally does **not** do (yet):
 - [x] Agent mode (multi-step tool chaining)
 - [x] Embeddings + ChromaDB for semantic RAG (with TF-IDF fallback)
 - [x] Streamlit Community Cloud deployment
+- [x] Voice input (browser-based speech-to-text, English + Hindi)
 - [ ] Vision (image understanding)
-- [ ] Voice input
 
 ---
 
