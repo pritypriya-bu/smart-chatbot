@@ -1,0 +1,28 @@
+# Smart Chatbot - runtime dependencies (all free, no paid APIs required)
+
+# --- UI + core data ---
+streamlit>=1.36
+pandas>=2.0
+requests>=2.31
+
+# --- File handling ---
+openpyxl>=3.1          # Excel read/write
+pypdf>=4.0             # PDF text extraction
+
+# --- File creation ---
+fpdf2>=2.7             # PDF generation
+python-pptx>=1.0       # PowerPoint generation
+matplotlib>=3.7        # Chart images
+
+# --- Web search fallback (no key required) ---
+ddgs>=6.0              # DuckDuckGo backend for websearch.py
+
+# --- Voice input (browser-based speech-to-text, no API key) ---
+streamlit-mic-recorder>=0.0.8
+
+# --- Optional: semantic RAG (recommended for better retrieval) ---
+# Enables meaning-based search across your knowledge base. Without these,
+# rag.py transparently falls back to keyword (TF-IDF) search.
+# First run downloads a ~90 MB embedding model to ~/.cache/huggingface/.
+chromadb>=0.5
+sentence-transformers>=3.0
