@@ -1,0 +1,24 @@
+# Smart Chatbot theme - professional dark slate with teal accent
+[theme]
+base = "dark"
+primaryColor = "#14B8A6"              # teal accent (buttons, focus, links)
+backgroundColor = "#0F172A"           # slate-900 main background
+secondaryBackgroundColor = "#1E293B"  # slate-800 sidebar / inputs
+textColor = "#E2E8F0"                 # slate-200 text
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+# Silence noisy import warnings from heavy ML packages that we do not use
+# directly (e.g. transformers' optional vision modules).
+[server]
+runOnSave = false
+
+[logger]
+level = "error"
+
+# Skip file-watching inside these libraries so their internal optional imports
+# don't trigger warnings on startup.
+[client]
+showErrorDetails = false
