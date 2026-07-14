@@ -47,6 +47,24 @@ st.markdown("""
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   hr {margin: 0.6rem 0;}
+
+  /* --- copy button under each chat message --- */
+  .copy-btn {
+      background: transparent;
+      border: 1px solid rgba(148,163,184,0.25);
+      color: rgba(226,232,240,0.6);
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      margin-top: 4px;
+      transition: all 0.15s ease;
+  }
+  .copy-btn:hover {
+      background: rgba(20,184,166,0.15);
+      color: rgba(226,232,240,0.95);
+      border-color: rgba(20,184,166,0.6);
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -57,29 +75,65 @@ st.markdown("""
 LIVE_KEYS = ["messages", "file", "df_view", "df_original",
              "code_current", "code_history", "created", "_file_sig"]
 
-# Chats are persisted to disk here so they survive app restarts
-CHATS_DIR = os.path.join(os.path.expanduser("~"), ".smart_chatbot")
-CHATS_FILE = os.path.join(CHATS_DIR, "chats.json")
+# Chats are persisted per-user under this base directory. On multi-user
+# deployments (e.g. Streamlit Cloud) each visitor gets their own subfolder
+# so nobody sees anyone else's chats or knowledge-base documents.
+STORAGE_ROOT = os.path.join(os.path.expanduser("~"), ".smart_chatbot")
+
+
+def _user_id() -> str:
+    """
+    Return a stable per-visitor id. We persist the id in the browser via
+    Streamlit's query params, so the same browser tab / bookmark keeps its
+    own chats but different visitors are isolated from each other.
+    """
+    try:
+        qp = st.query_params
+        uid = qp.get("u")
+        if uid and len(str(uid)) >= 8:
+            return str(uid)
+        new_uid = uuid.uuid4().hex[:16]
+        try:
+            qp["u"] = new_uid
+        except Exception:
+            pass
+        return new_uid
+    except Exception:
+        # Extremely defensive fallback: session-only id (lost on page refresh
+        # but still isolates concurrent visitors in the same server process).
+        if "_uid_fallback" not in st.session_state:
+            st.session_state["_uid_fallback"] = uuid.uuid4().hex[:16]
+        return st.session_state["_uid_fallback"]
+
+
+def _user_dir() -> str:
+    """Return this visitor's private folder, creating it lazily."""
+    d = os.path.join(STORAGE_ROOT, "users", _user_id())
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _chats_file() -> str:
+    return os.path.join(_user_dir(), "chats.json")
 
 
 def save_chats(conversations):
-    """Persist only chat text (id/title/messages) to disk - not loaded data/files."""
+    """Persist only chat text (id/title/messages) to this visitor's private file."""
     try:
-        os.makedirs(CHATS_DIR, exist_ok=True)
         light = [{"id": c["id"], "title": c.get("title", "New chat"),
                   "custom": c.get("custom", False),
                   "messages": c.get("messages") or []}
                  for c in conversations]
-        with open(CHATS_FILE, "w", encoding="utf-8") as f:
+        with open(_chats_file(), "w", encoding="utf-8") as f:
             json.dump(light, f, ensure_ascii=False)
     except Exception:
         pass   # never let a save failure crash the app
 
 
 def load_chats():
-    """Load previously saved chats from disk into full conversation structures."""
+    """Load this visitor's previously saved chats into full conversation structures."""
     try:
-        with open(CHATS_FILE, encoding="utf-8") as f:
+        with open(_chats_file(), encoding="utf-8") as f:
             light = json.load(f)
     except Exception:
         return []
@@ -239,7 +293,7 @@ with st.sidebar:
         "<div style='font-size:1.25rem;font-weight:700;letter-spacing:.3px;'>"
         "🤖 Smart Chatbot</div>"
         "<div style='font-size:.75rem;opacity:.6;margin-bottom:.6rem;'>"
-        "v1.7 · free AI stack</div>",
+        "v1.8 · free AI stack</div>",
         unsafe_allow_html=True,
     )
     st.button("🆕 New chat", on_click=_cb_new_chat, use_container_width=True,
@@ -316,8 +370,8 @@ with st.sidebar:
     with st.expander("⚙️ AI model", expanded=False):
         provider = st.selectbox(
             "Provider (all free)",
-            ["ollama", "groq", "gemini"],
-            help="Ollama = 100% local, no key. Groq/Gemini = free tier, one API key.",
+            ["groq", "gemini", "ollama"],
+            help="Groq / Gemini = free tier (one API key). Ollama = 100% local, no key.",
             key="cfg_provider",
         )
 
@@ -506,7 +560,7 @@ if kb_files:
                 docs.append({"name": f.name, "text": _doc_text(f.name, f.getvalue())})
             except Exception as e:
                 st.warning(f"Could not load {f.name}: {e}")
-        idx = RagIndex()
+        idx = RagIndex(collection_name=f"kb_{_user_id()}")
         idx.build(docs)
         st.session_state.kb_index = idx
         st.session_state.kb_docs = [d["name"] for d in docs]
@@ -597,22 +651,41 @@ if created:
 st.divider()
 
 # ---------- CHAT HISTORY ----------
-def render_message(role, content):
-    """Assistant messages on the left, user messages pushed to the right."""
+def _copy_button_html(text: str, idx: int) -> str:
+    """Small inline copy button. Uses navigator.clipboard - works in modern browsers."""
+    # Escape the text for safe JS embedding
+    safe = (text.replace("\\", "\\\\").replace("`", "\\`")
+                 .replace("</", "<\\/"))
+    return (
+        f'<button class="copy-btn" title="Copy message" '
+        f'onclick="navigator.clipboard.writeText(`{safe}`)'
+        f'.then(()=>{{this.innerText=\'✓ Copied\';'
+        f'setTimeout(()=>this.innerText=\'📋 Copy\',1400);}})">'
+        f'📋 Copy</button>'
+    )
+
+
+def render_message(role, content, idx=0):
+    """Assistant messages on the left, user messages pushed to the right.
+    Each message also gets a small Copy button."""
     if role == "user":
         _, right = st.columns([1, 3])
         with right:
             with st.chat_message("user"):
                 st.markdown(content)
+                st.markdown(_copy_button_html(content, idx),
+                            unsafe_allow_html=True)
     else:
         left, _ = st.columns([3, 1])
         with left:
             with st.chat_message("assistant"):
                 st.markdown(content)
+                st.markdown(_copy_button_html(content, idx),
+                            unsafe_allow_html=True)
 
 
-for m in st.session_state.messages:
-    render_message(m["role"], m["content"])
+for i, m in enumerate(st.session_state.messages):
+    render_message(m["role"], m["content"], idx=i)
 
 
 # ====================== CHAT HANDLER ======================================
@@ -1102,7 +1175,7 @@ def run_agent(llm, prompt):
 
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
-    render_message("user", prompt)
+    render_message("user", prompt, idx=len(st.session_state.messages) - 1)
 
     created_now = False
     try:
@@ -1120,7 +1193,7 @@ if prompt:
     except Exception as e:
         reply = f"❌ Unexpected error: {e}"
 
-    render_message("assistant", reply)
+    render_message("assistant", reply, idx=len(st.session_state.messages))
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
     _persist()   # save this exchange to disk

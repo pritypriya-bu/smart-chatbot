@@ -244,13 +244,13 @@ class RagIndex:
     """Automatically picks the embeddings backend when available,
     otherwise falls back to TF-IDF. Interface is identical either way."""
 
-    def __init__(self):
+    def __init__(self, collection_name: str = "kb"):
         if HAS_EMBEDDINGS:
             try:
                 # Pre-load the model so a download failure surfaces here
                 # (before build/search) and we can fall back cleanly.
                 _get_embed_model()
-                self._impl = _EmbeddingsIndex()
+                self._impl = _EmbeddingsIndex(collection_name=collection_name)
             except Exception:
                 self._impl = _TfidfIndex()
         else:
