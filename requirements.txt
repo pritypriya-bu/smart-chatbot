@@ -20,6 +20,9 @@ ddgs>=6.0              # DuckDuckGo backend for websearch.py
 # --- Voice input (browser-based speech-to-text, no API key) ---
 streamlit-mic-recorder>=0.0.8
 
+# --- Per-user identity (silent, no popup) ---
+streamlit-local-storage>=0.0.24
+
 # --- Optional: semantic RAG (recommended for better retrieval) ---
 # Enables meaning-based search across your knowledge base. Without these,
 # rag.py transparently falls back to keyword (TF-IDF) search.

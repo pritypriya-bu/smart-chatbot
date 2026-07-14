@@ -47,24 +47,6 @@ st.markdown("""
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   hr {margin: 0.6rem 0;}
-
-  /* --- copy button under each chat message --- */
-  .copy-btn {
-      background: transparent;
-      border: 1px solid rgba(148,163,184,0.25);
-      color: rgba(226,232,240,0.6);
-      border-radius: 6px;
-      padding: 2px 8px;
-      font-size: 0.72rem;
-      cursor: pointer;
-      margin-top: 4px;
-      transition: all 0.15s ease;
-  }
-  .copy-btn:hover {
-      background: rgba(20,184,166,0.15);
-      color: rgba(226,232,240,0.95);
-      border-color: rgba(20,184,166,0.6);
-  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,29 +63,78 @@ LIVE_KEYS = ["messages", "file", "df_view", "df_original",
 STORAGE_ROOT = os.path.join(os.path.expanduser("~"), ".smart_chatbot")
 
 
+# --- persistent per-visitor identity ---------------------------------------
+# We store a random 16-char id in the browser's localStorage. This is silent
+# (no permission prompt, no cookie banner), invisible in the URL, and stable
+# across sessions on the same browser. Different browsers / incognito / other
+# users get their own fresh id -> full isolation of chats and knowledge base.
+
+try:
+    from streamlit_local_storage import LocalStorage
+    _HAS_LOCAL_STORAGE = True
+except ImportError:
+    LocalStorage = None
+    _HAS_LOCAL_STORAGE = False
+
+
+def _get_local_storage():
+    """Instantiate LocalStorage lazily; it needs the Streamlit script context."""
+    if not _HAS_LOCAL_STORAGE:
+        return None
+    ls = st.session_state.get("_local_storage_instance")
+    if ls is None:
+        try:
+            ls = LocalStorage()
+            st.session_state["_local_storage_instance"] = ls
+        except Exception:
+            return None
+    return ls
+
+
 def _user_id() -> str:
     """
-    Return a stable per-visitor id. We persist the id in the browser via
-    Streamlit's query params, so the same browser tab / bookmark keeps its
-    own chats but different visitors are isolated from each other.
+    Return a stable per-visitor id.
+
+    Preferred path: read/write to browser localStorage silently - no popups,
+    no banners, no URL noise. The id survives page refresh, browser restart,
+    and tab close/reopen.
+
+    Fallbacks (in order): URL query param -> session_state (worst case,
+    lost on refresh but still isolates concurrent visitors).
     """
-    try:
-        qp = st.query_params
-        uid = qp.get("u")
-        if uid and len(str(uid)) >= 8:
-            return str(uid)
-        new_uid = uuid.uuid4().hex[:16]
+    # Same-run cache: don't do the localStorage round-trip on every rerun
+    cached = st.session_state.get("_persistent_uid")
+    if cached:
+        return cached
+
+    uid = None
+    ls = _get_local_storage()
+    if ls is not None:
         try:
-            qp["u"] = new_uid
+            uid = ls.getItem("smart_chatbot_uid")
+        except Exception:
+            uid = None
+
+    # Legacy fallback: check URL for older visitors who had ?u=... set
+    if not uid:
+        try:
+            qp_uid = st.query_params.get("u")
+            if qp_uid and len(str(qp_uid)) >= 8:
+                uid = str(qp_uid)
         except Exception:
             pass
-        return new_uid
-    except Exception:
-        # Extremely defensive fallback: session-only id (lost on page refresh
-        # but still isolates concurrent visitors in the same server process).
-        if "_uid_fallback" not in st.session_state:
-            st.session_state["_uid_fallback"] = uuid.uuid4().hex[:16]
-        return st.session_state["_uid_fallback"]
+
+    # First-time visitor -> mint a fresh id and remember it
+    if not uid:
+        uid = uuid.uuid4().hex[:16]
+        if ls is not None:
+            try:
+                ls.setItem("smart_chatbot_uid", uid)
+            except Exception:
+                pass
+
+    st.session_state["_persistent_uid"] = uid
+    return uid
 
 
 def _user_dir() -> str:
@@ -293,7 +324,7 @@ with st.sidebar:
         "<div style='font-size:1.25rem;font-weight:700;letter-spacing:.3px;'>"
         "🤖 Smart Chatbot</div>"
         "<div style='font-size:.75rem;opacity:.6;margin-bottom:.6rem;'>"
-        "v1.8 · free AI stack</div>",
+        "v1.10 · free AI stack</div>",
         unsafe_allow_html=True,
     )
     st.button("🆕 New chat", on_click=_cb_new_chat, use_container_width=True,
@@ -651,37 +682,102 @@ if created:
 st.divider()
 
 # ---------- CHAT HISTORY ----------
-def _copy_button_html(text: str, idx: int) -> str:
-    """Small inline copy button. Uses navigator.clipboard - works in modern browsers."""
-    # Escape the text for safe JS embedding
-    safe = (text.replace("\\", "\\\\").replace("`", "\\`")
-                 .replace("</", "<\\/"))
-    return (
-        f'<button class="copy-btn" title="Copy message" '
-        f'onclick="navigator.clipboard.writeText(`{safe}`)'
-        f'.then(()=>{{this.innerText=\'✓ Copied\';'
-        f'setTimeout(()=>this.innerText=\'📋 Copy\',1400);}})">'
-        f'📋 Copy</button>'
-    )
+def _copy_button_component(text: str, idx: int):
+    """
+    Small copy icon rendered as an iframe component. Uses navigator.clipboard
+    inside the iframe (allowed on https/localhost) with a document.execCommand
+    fallback, so it works on Streamlit Cloud, deploy previews, and localhost.
+    """
+    import json as _json
+    from streamlit.components.v1 import html as _html
+    payload = _json.dumps(text)   # safely escapes quotes, backticks, backslashes
+    _html(f"""
+<div class="copy-wrap">
+  <button class="copy-icon" title="Copy" onclick='copyText_{idx}()'>
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+         stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+    <span class="copy-label">Copy</span>
+  </button>
+</div>
+<style>
+  html, body {{ margin: 0; background: transparent; }}
+  .copy-wrap {{ display: flex; justify-content: flex-end; padding: 2px 4px; }}
+  .copy-icon {{
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent;
+    border: 1px solid rgba(148,163,184,0.25);
+    color: rgba(226,232,240,0.6);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font: 500 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }}
+  .copy-icon:hover {{
+    background: rgba(20,184,166,0.15);
+    color: #E2E8F0;
+    border-color: rgba(20,184,166,0.6);
+  }}
+  .copy-icon.done {{
+    color: #14B8A6;
+    border-color: #14B8A6;
+  }}
+</style>
+<script>
+  const TEXT_{idx} = {payload};
+  function copyText_{idx}() {{
+    const btn = document.querySelector('.copy-icon');
+    const setDone = () => {{
+      btn.classList.add('done');
+      btn.querySelector('.copy-label').textContent = 'Copied';
+      setTimeout(() => {{
+        btn.classList.remove('done');
+        btn.querySelector('.copy-label').textContent = 'Copy';
+      }}, 1400);
+    }};
+    // Modern clipboard API (works in https/localhost iframes with allow-same-origin)
+    if (navigator.clipboard && window.isSecureContext) {{
+      navigator.clipboard.writeText(TEXT_{idx}).then(setDone).catch(() => {{
+        fallback();
+      }});
+    }} else {{
+      fallback();
+    }}
+    function fallback() {{
+      const ta = document.createElement('textarea');
+      ta.value = TEXT_{idx};
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {{ document.execCommand('copy'); setDone(); }}
+      catch (e) {{ console.error('copy failed', e); }}
+      document.body.removeChild(ta);
+    }}
+  }}
+</script>
+""", height=32)
 
 
 def render_message(role, content, idx=0):
     """Assistant messages on the left, user messages pushed to the right.
-    Each message also gets a small Copy button."""
+    Each message has a small copy button in the corner (ChatGPT/Claude-style)."""
     if role == "user":
         _, right = st.columns([1, 3])
         with right:
             with st.chat_message("user"):
                 st.markdown(content)
-                st.markdown(_copy_button_html(content, idx),
-                            unsafe_allow_html=True)
+                _copy_button_component(content, idx)
     else:
         left, _ = st.columns([3, 1])
         with left:
             with st.chat_message("assistant"):
                 st.markdown(content)
-                st.markdown(_copy_button_html(content, idx),
-                            unsafe_allow_html=True)
+                _copy_button_component(content, idx)
 
 
 for i, m in enumerate(st.session_state.messages):
