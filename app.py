@@ -430,7 +430,7 @@ with st.sidebar:
                       "Otherwise get a free key at https://console.groq.com/keys"),
                 key="cfg_groq_key",
             )
-            model = st.text_input("Model", "llama-3.3-70b-versatile",
+            model = st.text_input("Model", "openai/gpt-oss-120b",
                                   key="cfg_groq_model")
         elif provider == "gemini":
             gemini_key = st.text_input(
